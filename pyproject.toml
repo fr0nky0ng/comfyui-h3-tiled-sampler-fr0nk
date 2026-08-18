@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-frank-h3-tiled-sampler"
+description = "Spatially tiled sampler for MiniMax H3 audio-video generation."
+version = "1.0.0"
+requires-python = ">= 3.10"
+dependencies = []
+
+[tool.comfy]
+DisplayName = "MiniMax H3 Tiled Sampler"
