@@ -1,5 +1,11 @@
 # MiniMax H3 Tiled Sampler
 
+## Performance
+
+Upscaling a 15-second video to about 2 megapixels (1080p) with this tiled
+sampler used roughly 75% of a 16 GB RTX 4060 Ti (~12 GB VRAM) and took 70
+minutes.
+
 A single ComfyUI node, **MiniMax H3 Tiled Sampler** (`model/sampling/minimax`), that
 denoises a MiniMax H3 audio-video latent in overlapping spatial tiles.
 
