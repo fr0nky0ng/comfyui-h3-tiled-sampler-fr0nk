@@ -1,3 +1,6 @@
+# Modified 2026-11-21 (NickPittas): added the optional tile_mode input and its
+# "auto" mode, which sizes tiles from the actual video latent. This file is
+# licensed under the GNU AGPL v3; see LICENSE.
 """Spatially tiled sampling for MiniMax H3.
 
 H3 denoises video and audio as one packed attention sequence, so its cost is
@@ -54,6 +57,32 @@ def tile_grid(video_shape, tile_width, tile_height, tile_overlap):
     return (th, tw,
             tile_starts(lat_h, th, overlap_len(tile_overlap, th)),
             tile_starts(lat_w, tw, overlap_len(tile_overlap, tw)))
+
+
+def ceil_div(a, b):
+    return -(-a // b)
+
+
+def auto_axis(canvas, limit, overlap, floor, axis):
+    """Tile extent in pixels for one axis, sized to the actual canvas."""
+    if canvas <= limit:
+        return canvas
+    if overlap >= limit:
+        raise ValueError("MiniMaxH3TiledSampler auto mode: tile_overlap {} must be smaller than the {} px tile limit of the {} axis".format(
+            overlap, limit, axis))
+    count = ceil_div(canvas - overlap, limit - overlap)
+    raw = 32 * ceil_div(canvas + (count - 1) * overlap, 32 * count)
+    return min(max(raw, floor), canvas)
+
+
+def auto_tile_size(width, height, overlap):
+    """(tile_width, tile_height) in pixels for a canvas of width x height pixels."""
+    wide_limit, short_limit = 1344, 768
+    if width >= height:
+        return (auto_axis(width, wide_limit, overlap, 0, "width"),
+                auto_axis(height, short_limit, overlap, short_limit, "height"))
+    return (auto_axis(width, short_limit, overlap, short_limit, "width"),
+            auto_axis(height, wide_limit, overlap, 0, "height"))
 
 
 def frame_row_index(lat_w, h0, h1, w0, w1):
@@ -202,20 +231,33 @@ class MiniMaxH3TiledSampler(io.ComfyNode):
                              tooltip="Tile height in pixels, rounded down to 32. The default is the model's native short edge."),
                 io.Int.Input("tile_overlap", default=192, min=0, max=nodes.MAX_RESOLUTION, step=32,
                              tooltip="Overlap between neighbouring tiles in pixels. More overlap hides tile seams and costs more tiles."),
+                io.Combo.Input("tile_mode", options=["manual", "auto"], default="manual", optional=True,
+                               tooltip="manual uses tile_width and tile_height. auto ignores them and sizes the tiles from the actual latent."),
             ],
             outputs=[io.Latent.Output()],
         )
 
     @classmethod
     def execute(cls, model, positive, negative, latent, seed, steps, cfg, sampler_name, scheduler, denoise,
-                tile_width, tile_height, tile_overlap) -> io.NodeOutput:
+                tile_width, tile_height, tile_overlap, tile_mode="manual") -> io.NodeOutput:
         samples = latent["samples"]
         if not samples.is_nested or len(samples.tensors) != 2 or samples.tensors[0].ndim != 5 or samples.tensors[0].shape[1] != 24:
             raise ValueError("MiniMaxH3TiledSampler expects a MiniMax H3 AV latent")
         video = samples.tensors[0]
         if video.shape[3] % PATCH or video.shape[4] % PATCH:
             raise ValueError("MiniMaxH3TiledSampler needs a latent whose width and height are multiples of 32 pixels")
+        width, height = video.shape[4] * VAE_STRIDE, video.shape[3] * VAE_STRIDE
+        if width <= 0 or height <= 0:
+            raise ValueError("MiniMaxH3TiledSampler needs a latent with a non-empty width and height")
+        if tile_mode not in ("manual", "auto"):
+            raise ValueError("MiniMaxH3TiledSampler: unknown tile_mode {!r}, expected 'manual' or 'auto'".format(tile_mode))
+        if tile_mode == "auto":
+            tile_width, tile_height = auto_tile_size(width, height, tile_overlap)
         th, tw, h_starts, w_starts = tile_grid(video.shape, tile_width, tile_height, tile_overlap)
+        if tile_mode == "auto":
+            logging.info("MiniMax H3 tiled sampling (auto): canvas {}x{} px, tile {}x{} px, grid {}x{}, x starts {}, y starts {}".format(
+                width, height, tw * VAE_STRIDE, th * VAE_STRIDE, len(w_starts), len(h_starts),
+                [w * VAE_STRIDE for w in w_starts], [h * VAE_STRIDE for h in h_starts]))
 
         model = model.clone()
         if len(h_starts) * len(w_starts) > 1:
