@@ -148,8 +148,13 @@ def tiled_diffusion_wrapper(tile_width, tile_height, tile_overlap):
                 if key not in layouts:
                     layouts[key] = tile_layout(full, full_rows, payload, (text_len, lat_t, th, tw, audio_t),
                                                frame_row_index(lat_w, h0, h1, w0, w1))
+                tile_kwargs = kwargs
+                dm = kwargs.get("denoise_mask")
+                if dm is not None and dm.ndim >= 2 and tuple(dm.shape[-2:]) == (lat_h, lat_w):
+                    tile_kwargs = dict(kwargs)
+                    tile_kwargs["denoise_mask"] = dm[..., h0:h1, w0:w1]
                 out = executor([video[:, :, :, h0:h1, w0:w1], audio], timestep, context, transformer_options,
-                               minimax_payload=tile_payload(payload, layouts[key], h0, h1, w0, w1), **kwargs)
+                               minimax_payload=tile_payload(payload, layouts[key], h0, h1, w0, w1), **tile_kwargs)
                 tile_weights = blend_weights(th, tw, neighbour_overlaps(h_starts, i, th),
                                              neighbour_overlaps(w_starts, j, tw), video.device)
                 video_out[:, :, :, h0:h1, w0:w1].addcmul_(out[0].float(), tile_weights)
